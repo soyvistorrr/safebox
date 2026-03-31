@@ -101,7 +101,7 @@ int sb_list(int sockfd, char *buf, size_t buflen)
 
     buf[bytes_to_read] = '\0';
 
-    return 0;
+    return bytes_to_read;
 }
 
 int sb_del(int sockfd, const char *filename)

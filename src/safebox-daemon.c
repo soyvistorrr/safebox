@@ -97,6 +97,10 @@ static void read_password(const char *prompt, char *buf, size_t buflen)
     size_t len = strlen(buf);
     if (len > 0 && buf[len - 1] == '\n')
         buf[len - 1] = '\0';
+
+    len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\r')
+        buf[len - 1] = '\0';
 }
 
 int main(int argc, char *argv[])
@@ -226,10 +230,18 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        if (auth_msg.op != 0)
+        {
+            uint8_t status_error = 1;
+            send(client_fd, &status_error, 1, 0);
+            close(client_fd);
+            continue;
+        }
+
         uint32_t expected_hash = sb_djb2(master_pwd);
         if (auth_msg.password_hash != expected_hash)
         {
-            LOG(STDOUT_FILENO, SB_LOG_WARN, "autenticacion fallida uid=%ld pid=%ld", (long)cred.uid, (long)cred.pid);
+            LOG(STDOUT_FILENO, SB_LOG_WARN, "Autenticacion fallida uid=%ld pid=%ld", (long)cred.uid, (long)cred.pid);
 
             uint8_t status_error = 1;
             send(client_fd, &status_error, 1, 0);
@@ -257,22 +269,27 @@ int main(int argc, char *argv[])
             case SB_OP_LIST:
             {
                 DIR *d = opendir(argv[1]);
+                if (d == NULL)
+                {
+                    uint8_t status = SB_ERR_IO;
+                    send(client_fd, &status, sizeof(status), 0);
+                    break;
+                }
+
                 char list_buf[4096] = {0};
                 uint32_t offset = 0;
-
-                if (d)
+                struct dirent *dir_ent;
+                while ((dir_ent = readdir(d)) != NULL)
                 {
-                    struct dirent *dir_ent;
-                    while ((dir_ent = readdir(d)) != NULL)
-                    {
-                        if (strcmp(dir_ent->d_name, ".") == 0 || strcmp(dir_ent->d_name, "..") == 0)
-                            continue;
-                        int len = snprintf(list_buf + offset, sizeof(list_buf) - offset, "%s\n", dir_ent->d_name);
-                        if (len > 0)
-                            offset += len;
-                    }
-                    closedir(d);
+                    if (strcmp(dir_ent->d_name, ".") == 0 || strcmp(dir_ent->d_name, "..") == 0)
+                        continue;
+                    int len = snprintf(list_buf + offset, sizeof(list_buf) - offset, "%s\n", dir_ent->d_name);
+                    if (len > 0 && offset + len < sizeof(list_buf))
+                        offset += len;
+                    else
+                        break;
                 }
+                closedir(d);
 
                 uint8_t status = SB_OK;
                 send(client_fd, &status, sizeof(status), 0);

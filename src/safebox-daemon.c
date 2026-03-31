@@ -79,11 +79,37 @@ static void read_password(const char *prompt, char *buf, size_t buflen)
         struct termios old_t, new_t;
         tcgetattr(STDIN_FILENO, &old_t);
         new_t = old_t;
-        new_t.c_lflag &= ~(tcflag_t)(ECHO | ECHOE | ECHOK | ECHONL);
+
+        new_t.c_lflag &= ~(tcflag_t)(ECHO | ICANON);
         tcsetattr(STDIN_FILENO, TCSANOW, &new_t);
 
-        if (fgets(buf, (int)buflen, stdin) == NULL)
-            buf[0] = '\0';
+        size_t i = 0;
+        while (i < buflen - 1)
+        {
+            int ch = getchar();
+
+            if (ch == '\n' || ch == '\r')
+            {
+                break;
+            }
+            else if (ch == 127 || ch == '\b')
+            {
+                if (i > 0)
+                {
+                    i--;
+                    printf("\b \b");
+                    fflush(stdout);
+                }
+            }
+            else if (ch >= 32 && ch <= 126)
+            {
+                buf[i++] = (char)ch;
+                printf("*");
+                fflush(stdout);
+            }
+        }
+
+        buf[i] = '\0';
 
         tcsetattr(STDIN_FILENO, TCSANOW, &old_t);
         printf("\n");
@@ -111,13 +137,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    DIR *dir = opendir(argv[1]);
-    if (dir == NULL)
+    if (access(argv[1], R_OK | W_OK | X_OK) != 0)
     {
-        perror("Error: El directorio de la boveda no existe o no hay permisos");
+        fprintf(stderr, "Error: El directorio de la boveda no existe o no hay permisos\n");
         return EXIT_FAILURE;
     }
-    closedir(dir);
 
     char master_pwd[MAX_KEY_LEN] = {0};
     read_password("safebox password: ", master_pwd, sizeof(master_pwd));
@@ -174,6 +198,10 @@ int main(int argc, char *argv[])
         close(pid_fd);
     }
 
+    char *abs_path = realpath(argv[1], NULL);
+    LOG(STDOUT_FILENO, SB_LOG_INFO, "daemon iniciado pid=%d boveda=%s", getpid(), abs_path ? abs_path : argv[1]);
+    free(abs_path);
+
     int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server_fd == -1)
     {
@@ -216,7 +244,7 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        struct ucred cred;
+        struct ucred cred = {0};
         socklen_t cred_len = sizeof(cred);
         if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) == 0)
         {
@@ -241,7 +269,7 @@ int main(int argc, char *argv[])
         uint32_t expected_hash = sb_djb2(master_pwd);
         if (auth_msg.password_hash != expected_hash)
         {
-            LOG(STDOUT_FILENO, SB_LOG_WARN, "Autenticacion fallida uid=%ld pid=%ld", (long)cred.uid, (long)cred.pid);
+            LOG(STDOUT_FILENO, SB_LOG_WARN, "autenticacion fallida uid=%ld pid=%ld", (long)cred.uid, (long)cred.pid);
 
             uint8_t status_error = 1;
             send(client_fd, &status_error, 1, 0);
@@ -291,6 +319,12 @@ int main(int argc, char *argv[])
                 }
                 closedir(d);
 
+                if (offset > 0 && list_buf[offset - 1] == '\n')
+                {
+                    offset--;
+                    list_buf[offset] = '\0';
+                }
+
                 uint8_t status = SB_OK;
                 send(client_fd, &status, sizeof(status), 0);
 
@@ -328,7 +362,7 @@ int main(int argc, char *argv[])
                 {
                     uint8_t status = SB_ERR_NOFILE;
                     send(client_fd, &status, 1, 0);
-                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s archivo no encontrado", filename);
+                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s - archivo no encontrado", filename);
                     break;
                 }
 
@@ -442,7 +476,7 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    LOG(STDOUT_FILENO, SB_LOG_OK, "GET %s entregado a pid=%ld", filename, (long)cred.pid);
+                    LOG(STDOUT_FILENO, SB_LOG_OK, "GET %s - entregado a pid=%ld", filename, (long)cred.pid);
                 }
 
                 close(mem_fd);
@@ -535,7 +569,7 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    LOG(STDOUT_FILENO, SB_LOG_OK, "PUT %s completado", filename);
+                    LOG(STDOUT_FILENO, SB_LOG_OK, "PUT %s - cifrado y guardado (pid=%ld)", filename, (long)cred.pid);
                 }
                 break;
             }
@@ -565,7 +599,7 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    LOG(STDOUT_FILENO, SB_LOG_OK, "DEL %s completado", filename);
+                    LOG(STDOUT_FILENO, SB_LOG_OK, "DEL %s - eliminado (pid=%ld)", filename, (long)cred.pid);
                 }
 
                 send(client_fd, &status, sizeof(status), 0);
@@ -573,7 +607,7 @@ int main(int argc, char *argv[])
             }
 
             case SB_OP_BYE:
-                LOG(STDOUT_FILENO, SB_LOG_INFO, "BYE uid=%ld pid=%ld sesion cerrada", (long)cred.uid, (long)cred.pid);
+                LOG(STDOUT_FILENO, SB_LOG_INFO, "BYE uid=%ld pid=%ld - sesion cerrada", (long)cred.uid, (long)cred.pid);
                 client_active = 0;
                 break;
 
@@ -590,8 +624,7 @@ int main(int argc, char *argv[])
     unlink(SB_SOCKET_PATH);
     close(server_fd);
 
-    LOG(STDOUT_FILENO, SB_LOG_INFO, "SIGTERM recibido");
-    LOG(STDOUT_FILENO, SB_LOG_INFO, "daemon terminado limpiamente");
+    LOG(STDOUT_FILENO, SB_LOG_INFO, "SIGTERM recibido - daemon terminado limpiamente");
 
     return EXIT_SUCCESS;
 }

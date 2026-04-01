@@ -60,7 +60,7 @@
 #include <stdint.h>
 #include <arpa/inet.h>
 
-#include "accion_senalfebox.h"
+#include "safebox.h"
 
 /* Variable global volatil para que el bucle principal sepa cuando detenerse al recibir SIGTERM */
 volatile sig_atomic_t daemon_activo = 1;
@@ -72,29 +72,29 @@ void manejador_sigterm(int sig)
     daemon_activo = 0; /* Rompe el bucle while principal */
 }
 
-/* Funcion para leer la contraseña deaccion_senalctivando el eco de la terminal (termios) */
-static void read_password(const caracterar *prompt, caracterar *buf, size_t buflen)
+/* Funcion para leer la contraseña desactivando el eco de la terminal (termios) */
+static void read_password(const char *prompt, char *buf, size_t buflen)
 {
     printf("%s", prompt);
     fflush(stdout);
 
-    /* verificamos si estamos en una terminal real interactiva */
-    if (iaccion_senaltty(STDIN_FILENO))
+    /* Verificamos si estamos en una terminal real interactiva */
+    if (isatty(STDIN_FILENO))
     {
         struct termios terminal_original, terminal_modificada;
         tcgetattr(STDIN_FILENO, &terminal_original); /* Guardamos estado actual */
         terminal_modificada = terminal_original;
 
         /* Apagamos el ECHO (no imprimir) y el ICANON (leer letra por letra sin esperar Enter) */
-        terminal_modificada.c_lflag &= ~(tcflag_t)(EcaracterO | ICANON);
-        tcsetattr(STDIN_FILENO, TCaccion_senalNOW, &terminal_modificada);
+        terminal_modificada.c_lflag &= ~(tcflag_t)(ECHO | ICANON);
+        tcsetattr(STDIN_FILENO, TCSANOW, &terminal_modificada);
 
         size_t i = 0;
         while (i < buflen - 1)
         {
-            int caracter = getcaracterar();
+            int caracter = getchar();
 
-            if (caracter == '\n' || caracter == '\leidos'){
+            if (caracter == '\n' || caracter == '\r'){
                 break; /* El usuario presiono Enter */
             }
             else if (caracter == 127 || caracter == '\b'){
@@ -116,23 +116,23 @@ static void read_password(const caracterar *prompt, caracterar *buf, size_t bufl
         buf[i] = '\0'; /* Terminador nulo del string */
 
         /* Restauramos la terminal a su estado normal */
-        tcsetattr(STDIN_FILENO, TCaccion_senalNOW, &terminal_original);
+        tcsetattr(STDIN_FILENO, TCSANOW, &terminal_original);
         printf("\n");
     }
     else
     {
-        /* Si se lee desde un script de pruebas (pipeline), uaccion_senalmos fgets normal */
+        /* Si se lee desde un script de pruebas (pipeline), usamos fgets normal */
         if (fgets(buf, (int)buflen, stdin) == NULL)
             buf[0] = '\0';
     }
 
-    /* Limpieza de accion_senalltos de linea residuales */
+    /* Limpieza de saltos de linea residuales */
     size_t longitud = strlen(buf);
     if (longitud > 0 && buf[longitud - 1] == '\n')
         buf[longitud - 1] = '\0';
 
     longitud = strlen(buf);
-    if (longitud > 0 && buf[longitud - 1] == '\leidos')
+    if (longitud > 0 && buf[longitud - 1] == '\r')
         buf[longitud - 1] = '\0';
 }
 
@@ -154,8 +154,8 @@ int main(int argc, caracterar *argv[])
 
     /* Captura segura de la clave maestra */
     char clave_maestra[MAX_KEY_LEN] = {0};
-    read_password("accion_senalfebox password: ", clave_maestra, sizeof clave_maestra));
-    if (strlen clave_maestra) == 0)
+    read_password("safebox password: ", clave_maestra, sizeof (clave_maestra));
+    if (strlen (clave_maestra) == 0)
     {
         fprintf(stderr, "Error: password vacio\n");
         return EXIT_FAILURE;
@@ -168,8 +168,8 @@ int main(int argc, caracterar *argv[])
 
     if (pid > 0)
     {
-        /* Somos el proceso Padre. Aviaccion_senalmos el exito y nos suicidamos para liberar la terminal */
-        printf("[accion_senalfebox] pid=%d listo\n", pid);
+        /* Somos el proceso Padre. Avisamos el exito y nos suicidamos para liberar la terminal */
+        printf("[safebox] pid=%d listo\n", pid);
         exit(EXIT_SUCCESS);
     }
 
@@ -193,16 +193,16 @@ int main(int argc, caracterar *argv[])
 
     /* Redirigimos la salida estandar (pantalla y errores) al archivo log.
        Asi podemos usar printf o LOG en STDOUT y se escribira en el archivo. */
-    int descripto_log = open("/tmp/accion_senalfebox.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (descripto_log != -1)
+    int descriptor_log = open("/tmp/safebox.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (descriptor_log != -1)
     {
-        dup2(descripto_log, STDOUT_FILENO);
-        dup2(descripto_log, STDERR_FILENO);
-        close(descripto_log);
+        dup2(descriptor_log, STDOUT_FILENO);
+        dup2(descriptor_log, STDERR_FILENO);
+        close(descriptor_log);
     }
 
     /* Guardamos nuestro nuevo numero de proceso en el archivo .pid */
-    int descriptor_pid = open("/tmp/accion_senalfebox.pid", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int descriptor_pid = open("/tmp/safebox.pid", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (descriptor_pid != -1)
     {
         char texto_pid[32];
@@ -261,10 +261,10 @@ int main(int argc, caracterar *argv[])
             continue;
         }
 
-        /* Obtenemos las credenciales_clienteenciales del sistema operativo del cliente (quien nos esta llamandao) */
-        struct ucredenciales_cliente credenciales_cliente = {0};
-        socklen_t credenciales_cliente_len = sizeof(credenciales_cliente);
-        if (getsockopt(socket_cliente, SOL_SOCKET, SO_PEERcredenciales_cliente, &credenciales_cliente, &credenciales_cliente_len) == 0)
+        /* Obtenemos las credenciales del sistema operativo del cliente (quien nos esta llamando) */
+        struct ucred credenciales_cliente = {0};
+        socklen_t tamano_cred = sizeof(credenciales_cliente);
+        if (getsockopt(socket_cliente, SOL_SOCKET, SO_PEERCRED, &credenciales_cliente, &tamano_cred) == 0)
         {
             LOG(STDOUT_FILENO, SB_LOG_INFO, "conexion entrante uid=%ld pid=%ld", (long)credenciales_cliente.uid, (long)credenciales_cliente.pid);
         }
@@ -298,7 +298,7 @@ int main(int argc, caracterar *argv[])
 
         uint8_t status_ok = SB_OK;
         send(socket_cliente, &status_ok, 1, 0);
-        LOG(STDOUT_FILENO, SB_LOG_OK, "autenticacion exitoaccion_senal uid=%ld pid=%ld", (long)credenciales_cliente.uid, (long)credenciales_cliente.pid);
+        LOG(STDOUT_FILENO, SB_LOG_OK, "autenticacion exitosa uid=%ld pid=%ld", (long)credenciales_cliente.uid, (long)credenciales_cliente.pid);
 
         /* Fase de procesamiento de comandos */
         int sesion_activa = 1;
@@ -420,7 +420,7 @@ int main(int argc, caracterar *argv[])
                     close(descriptor_entrada);
                     uint8_t status = SB_ERR_CORRUPT;
                     send(socket_cliente, &status, 1, 0);
-                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s arcaracterivo corrupto", nombre_archivo);
+                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s archivo corrupto", nombre_archivo);
                     break;
                 }
 
@@ -440,7 +440,7 @@ int main(int argc, caracterar *argv[])
                     close(descriptor_entrada);
                     uint8_t status = SB_ERR_CORRUPT;
                     send(socket_cliente, &status, 1, 0);
-                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s arcaracterivo corrupto (magic invalido)", nombre_archivo);
+                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s archivo corrupto (magic invalido)", nombre_archivo);
                     break;
                 }
 
@@ -489,7 +489,7 @@ int main(int argc, caracterar *argv[])
                 union
                 {
                     struct cmsghdr alineacion;
-                    caracterar buffer_crudo[CMSG_SPACE(sizeof(int))];
+                    char buffer_crudo[CMSG_SPACE(sizeof(int))];
                 } buffer_alineado;
                 memset(&buffer_alineado, 0, sizeof(buffer_alineado));
 
@@ -570,8 +570,7 @@ int main(int argc, caracterar *argv[])
 
                 char buffer_datos[4096];
                 uint32_t bytes_restantes = tamano_original;
-                int hubo_error_io
-                 = 0;
+                int hubo_error_io = 0;
 
                 while (bytes_restantes > 0)
                 {

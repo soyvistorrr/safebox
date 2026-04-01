@@ -38,70 +38,85 @@
 
 int sb_connect(const char *socket_path, const char *password)
 {
-    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sockfd < 0)
+    /* Solicitamos al sistema operativo un canal de comunicacion local (socket) */
+    int socket_cliente = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (socket_cliente < 0)
         return -1;
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(struct sockaddr_un));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+    /* Preparamos la direccion fisica del daemon en el sistema de archivos */
+    struct sockaddr_un direccion_servidor;
+    memset(&direccion_servidor, 0, sizeof(struct sockaddr_un));
+    direccion_servidor.sun_family = AF_UNIX;
+    
+    /* Copiamos la ruta de forma segura para evitar desbordamientos de memoria */
+    strncpy(direccion_servidor.sun_path, socket_path, sizeof(direccion_servidor.sun_path) - 1);
 
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1)
+    /* Intentamos establecer la conexion con el daemon */
+    if (connect(socket_cliente, (struct sockaddr *)&direccion_servidor, sizeof(struct sockaddr_un)) == -1)
     {
-        close(sockfd);
+        close(socket_cliente);
         return -1;
     }
 
-    sb_auth_msg_t auth_msg;
-    auth_msg.op = 0;
-    auth_msg.password_hash = sb_djb2(password);
+    /* Construimos el mensaje de seguridad con el hash de la clave */
+    sb_auth_msg_t mensaje_autenticacion;
+    mensaje_autenticacion.op = 0; /* Opcode dummy para el saludo */
+    mensaje_autenticacion.password_hash = sb_djb2(password);
 
-    if (send(sockfd, &auth_msg, sizeof(auth_msg), 0) != sizeof(auth_msg))
+    /* Enviamos nuestras credenciales por el socket */
+    if (send(socket_cliente, &mensaje_autenticacion, sizeof(mensaje_autenticacion), 0) != sizeof(mensaje_autenticacion))
     {
-        close(sockfd);
+        close(socket_cliente);
         return -1;
     }
 
+    /* Esperamos la confirmacion del daemon, MSG_WAITALL garantiza que leamos el byte completo */
     uint8_t status;
-    if (recv(sockfd, &status, sizeof(uint8_t), MSG_WAITALL) != sizeof(uint8_t) || status != SB_OK)
+    if (recv(socket_cliente, &status, sizeof(uint8_t), MSG_WAITALL) != sizeof(uint8_t) || status != SB_OK)
         return -1;
 
-    return sockfd;
+    /* Autenticacion exitosa, retornamos el descriptor para que el shell lo use */
+    return socket_cliente;
 }
 
 int sb_list(int sockfd, char *buf, size_t buflen)
 {
+    /* validaciones basicas de seguridad para evitar Segmentation Faults */
     if (sockfd < 0 || buf == NULL || buflen == 0)
         return -1;
 
+    /* Enviamos el codigo de operacion para listar */
     uint8_t op = SB_OP_LIST;
     if (send(sockfd, &op, sizeof(uint8_t), 0) != sizeof(uint8_t))
         return -1;
 
+    /* Eldaemon nos indica de antemano cuantos bytes mide la lista completa */
     uint8_t status;
     if (recv(sockfd, &status, sizeof(uint8_t), MSG_WAITALL) != sizeof(uint8_t) || status != SB_OK)
         return -1;
 
-    uint32_t list_size = 0;
-    if (recv(sockfd, &list_size, sizeof(uint32_t), MSG_WAITALL) != sizeof(uint32_t))
+    /* Protegemos el buffer local truncando la lectura si el daemon envia mas de lo que cabe */
+    uint32_t tamano_total_lista = 0;
+    if (recv(sockfd, &tamano_total_lista, sizeof(uint32_t), MSG_WAITALL) != sizeof(uint32_t))
         return -1;
 
-    uint32_t bytes_to_read = list_size;
-    if (bytes_to_read >= buflen)
+    uint32_t bytes_a_leer = tamano_total_lista;
+    if (bytes_a_leer >= buflen)
     {
-        bytes_to_read = buflen - 1;
+        bytes_a_leer = buflen - 1; /* Dejamos 1 byte reservado para le finalizador nulo */
     }
 
-    if (bytes_to_read > 0)
+    /* Lememos exactamente la porcion de texto calculada */
+    if (bytes_a_leer > 0)
     {
-        if (recv(sockfd, buf, bytes_to_read, MSG_WAITALL) != bytes_to_read)
+        if (recv(sockfd, buf, bytes_a_leer, MSG_WAITALL) != bytes_a_leer)
             return -1;
     }
 
-    buf[bytes_to_read] = '\0';
+    /* Aseguramos que el string este correctamente terminado */
+    buf[bytes_a_leer] = '\0';
 
-    return bytes_to_read;
+    return bytes_a_leer;
 }
 
 int sb_del(int sockfd, const char *filename)
@@ -111,15 +126,19 @@ int sb_del(int sockfd, const char *filename)
         return -1;
     }
 
-    uint8_t op = SB_OP_DEL;
+    /* Avisamos al daemon que queremos borrar un archivo */
+    uint8_t codigo_operacion = SB_OP_DEL;
     if (send(sockfd, &op, sizeof(uint8_t), 0) != sizeof(uint8_t))
         return -1;
 
-    size_t name_len = strlen(filename) + 1;
+    /* Calculamos la longitud del nombre asegurandonos de inculuir el byte nulo '\0' */
+    size_t longitud_nombre = strlen(filename) + 1;
 
-    if (send(sockfd, filename, name_len, 0) != (ssize_t)name_len)
+    /* Enviamos el nombre completo */
+    if (send(sockfd, filename, longitud_nombre, 0) != (ssize_t)longitud_nombre)
         return -1;
 
+    /* Esperamos el veredicto para saber si el archivo se elimino correctamente */
     uint8_t status;
     if (recv(sockfd, &status, sizeof(uint8_t), MSG_WAITALL) != sizeof(uint8_t) || status != SB_OK)
         return -1;
@@ -132,56 +151,66 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     if (sockfd < 0 || filename == NULL || filepath == NULL)
         return -1;
 
-    int fd_local = open(filepath, O_RDONLY);
-    if (fd_local < 0)
-        return -1;
+    /* Abrimos el archivo del disco duro de la computadora en modo lectura */
+    int archivo_local = open(filepath, O_RDONLY);
+    if (archivo_local < 0)
+        return -1; /* Archivo no existe o faltan permisos */
 
-    struct stat st;
-    if (fstat(fd_local, &st) < 0)
+    /* Extraemos informacion del archivo para conocer su peso exacto */
+    struct stat info_archivo;
+    if (fstat(archivo_local, &info_archivo) < 0)
     {
-        close(fd_local);
-        return -1;
-    }
-    uint32_t file_size = (uint32_t)st.st_size;
-
-    uint8_t op = SB_OP_PUT;
-    if (send(sockfd, &op, sizeof(uint8_t), 0) != sizeof(uint8_t))
-    {
-        close(fd_local);
+        close(archivo_local);
         return -1;
     }
+    uint32_t tamano_archivo = (uint32_t)info_archivo.st_size;
 
-    size_t name_len = strlen(filename) + 1;
-    if (send(sockfd, filename, name_len, 0) != (ssize_t)name_len)
+    /* Comenzamos el protocolo de envio con el Opcode correspondiente */
+    uint8_t codigo_operacion = SB_OP_PUT;
+    if (send(sockfd, &codigo_operacion, sizeof(uint8_t), 0) != sizeof(uint8_t))
     {
-        close(fd_local);
+        close(archivo_local);
         return -1;
     }
 
-    if (send(sockfd, &file_size, sizeof(uint32_t), 0) != sizeof(uint32_t))
+    /* Enviamos el nombre que tendra en la boveda (incluyendo el terminador '\0') */
+    size_t longitud_nombre = strlen(filename) + 1;
+    if (send(sockfd, filename, longitud_nombre, 0) != (ssize_t)longitud_nombre)
     {
-        close(fd_local);
+        close(archivo_local);
         return -1;
     }
 
+    /* Enviamos el peso del archivo (4 bytes exactos) */
+    if (send(sockfd, &tamano_archivo, sizeof(uint32_t), 0) != sizeof(uint32_t))
+    {
+        close(archivo_local);
+        return -1;
+    }
+
+    /* Leemos el archivo del disco en fragmentos de 4KB y los enciamos por la red */
     char buffer[4096];
-    ssize_t bytes_read;
-    while ((bytes_read = read(fd_local, buffer, sizeof(buffer))) > 0)
+    ssize_t bytes_leidos;
+
+    while ((bytes_leidos = read(archivo_local, buffer, sizeof(buffer))) > 0)
     {
-        ssize_t total_sent = 0;
-        while (total_sent < bytes_read)
+        ssize_t total_enviado = 0;
+
+        /* Garantizamos que el bloque completo sea empujado por el socket antes de leer mas disco */
+        while (total_enviado < bytes_leidos)
         {
-            ssize_t s = send(sockfd, buffer + total_sent, bytes_read - total_sent, 0);
+            ssize_t s = send(sockfd, buffer + total_enviado, bytes_leidos - total_enviado, 0);
             if (s <= 0)
             {
-                close(fd_local);
-                return -1;
+                close(archivo_local);
+                return -1; /* Falla critica de conexion a mitad de transferencia */
             }
-            total_sent += s;
+            total_enviado += s;
         }
     }
-    close(fd_local);
+    close(archivo_local); /* Transferencia finalizada, cerramos el archivo local */
 
+    /* Revisamos si el daemon logro cifrar y guardar todo con exito */
     uint8_t status;
     if (recv(sockfd, &status, sizeof(uint8_t), MSG_WAITALL) != sizeof(uint8_t))
     {
@@ -193,9 +222,10 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
 
 void sb_bye(int sockfd)
 {
-    uint8_t op = SB_OP_BYE;
-    send(sockfd, &op, sizeof(uint8_t), 0);
-    close(sockfd);
+    /* Nos despedimos del daemon formalmente para que cierre su lado de la conexion */
+    uint8_t codigo_operacion = SB_OP_BYE;
+    send(sockfd, &codigo_operacion, sizeof(uint8_t), 0);
+    close(sockfd); /* cerramos nuestro lado de la comunicacion */
 }
 
 int sb_get(int sockfd, const char *filename)
@@ -203,45 +233,59 @@ int sb_get(int sockfd, const char *filename)
     if (sockfd < 0 || filename == NULL)
         return -1;
 
-    uint8_t op = SB_OP_GET;
-    if (send(sockfd, &op, sizeof(uint8_t), 0) != sizeof(uint8_t))
+    /* Iniciamos la peticion GET y enviamos el nombre del archivo buscado */
+    uint8_t codigo_operacion = SB_OP_GET;
+    if (send(sockfd, &codigo_operacion, sizeof(uint8_t), 0) != sizeof(uint8_t))
         return -1;
 
-    size_t name_len = strlen(filename) + 1;
-    if (send(sockfd, filename, name_len, 0) != (ssize_t)name_len)
+    size_t longitud_nombre = strlen(filename) + 1;
+    if (send(sockfd, filename, longitud_nombre, 0) != (ssize_t)longitud_nombre)
         return -1;
 
+    /* Preparamos el sobre complejo (msghdr) para recibir datos y metadata del kernel */
     struct msghdr msg;
     memset(&msg, 0, sizeof(msg));
 
-    struct iovec iov[1];
+    /* Preparamos el compartimiento para el dato normal (el byte de confirmacion SB_OK) */
+    struct iovec vector_datos[1];
     uint8_t status;
-    iov[0].iov_base = &status;
-    iov[0].iov_len = sizeof(status);
-    msg.msg_iov = iov;
+    vector_datos[0].iov_base = &status;
+    vector_datos[0].iov_len = sizeof(status);
+    msg.msg_iov = vector_datos;
     msg.msg_iovlen = 1;
 
+    /* Preparamos el compartimiento de control donde el kernel inyectara el File Descriptor.
+       Utilizamos unicon para forzar la correcta alineacion de la memoria y evitar cuelgues. */
     union
     {
-        struct cmsghdr align;
-        char buf[CMSG_SPACE(sizeof(int))];
-    } cmsg_buf;
-    memset(&cmsg_buf, 0, sizeof(cmsg_buf));
-    msg.msg_control = cmsg_buf.buf;
-    msg.msg_controllen = sizeof(cmsg_buf.buf);
+        struct cmsghdr alineacion_forzada;
+        char buffer_crudo[CMSG_SPACE(sizeof(int))];
+    } buffer_alineado;
+    memset(&buffer_alineado, 0, sizeof(buffer_alineado));
 
+    msg.msg_control = buffer_alineado.buffer_crudo;
+    msg.msg_controllen = sizeof(buffer_alineado.buffer_crudo);
+
+    /* Recibimos el paquete utilizando la syscall avanzada recvmsg */
     if (recvmsg(sockfd, &msg, MSG_WAITALL) <= 0)
         return -1;
+
+    /* Si el daemon responde algo distinto a SB_OK, el archivo no existe o hubo conrupcion */
     if (status != SB_OK)
         return -1;
 
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (cmsg != NULL && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+    /* Extraemos la metadata de control del sobre */
+    struct cmsghdr *cabecera_control = CMSG_FIRSTHDR(&msg);
+   
+    /* Verificamos que el paquete realmente contenga "Derechos" (SMC_RIGTHS) que representan al FD */
+    if (cabecera_control != NULL && cabecera_control->cmsg_level == SOL_SOCKET && cabecera_control->cmsg_type == SCM_RIGHTS)
     {
-        int received_fd;
-        memcpy(&received_fd, CMSG_DATA(cmsg), sizeof(int));
-        return received_fd;
+        int descriptor_recibido;
+        /* Copiamos el descriptor de archivo de forma segura desde la memoria del kernel a nuestra variable */
+        memcpy(&descriptor_recibido, CMSG_DATA(cabecera_control), sizeof(int));
+        return descriptor_recibido;
     }
 
+    /* Error de protocolo si no llego ningun descriptor */
     return -1;
 }

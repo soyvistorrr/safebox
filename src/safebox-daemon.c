@@ -665,7 +665,7 @@ int main(int argc, char *argv[])
     /* RUTINA DE LIMPIEZA Y APAGADO
        Si llegamos aca es porque recibimos SIGTERM y daemon_activo = 0 
     */
-    unlink("/tmp/accion_senalfebox.pid"); /* Borramos registro de existencia */
+    unlink("/tmp/safebox.pid"); /* Borramos registro de existencia */
     unlink(SB_SOCKET_PATH);               /* Borramos el socket fisico de /tmp */
     close(socket_servidor);
 

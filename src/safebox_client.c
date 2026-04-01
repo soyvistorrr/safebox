@@ -168,10 +168,16 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     ssize_t bytes_read;
     while ((bytes_read = read(fd_local, buffer, sizeof(buffer))) > 0)
     {
-        if (send(sockfd, buffer, bytes_read, 0) != bytes_read)
+        ssize_t total_sent = 0;
+        while (total_sent < bytes_read)
         {
-            close(fd_local);
-            return -1;
+            ssize_t s = send(sockfd, buffer + total_sent, bytes_read - total_sent, 0);
+            if (s <= 0)
+            {
+                close(fd_local);
+                return -1;
+            }
+            total_sent += s;
         }
     }
     close(fd_local);

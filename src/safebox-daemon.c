@@ -58,6 +58,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <stdint.h>
+#include <arpa/inet.h>
 
 #include "safebox.h"
 
@@ -362,7 +363,7 @@ int main(int argc, char *argv[])
                 {
                     uint8_t status = SB_ERR_NOFILE;
                     send(client_fd, &status, 1, 0);
-                    LOG(STDOUT_FILENO, SB_LOG_ERROR, "GET %s - archivo no encontrado", filename);
+                    LOG(STDOUT_FILENO, SB_LOG_WARN, "GET %s - archivo no encontrado", filename);
                     break;
                 }
 
@@ -385,7 +386,7 @@ int main(int argc, char *argv[])
                 }
 
                 sb_file_header_t *header = (sb_file_header_t *)map;
-                uint32_t expected_payload_size = header->payload_size;
+                uint32_t expected_payload_size = ntohl(header->payload_size);
                 size_t actual_payload_size = st.st_size - sizeof(sb_file_header_t);
 
                 if (header->version != SB_VERSION || actual_payload_size != expected_payload_size || actual_payload_size < SB_MAGIC_LEN)
@@ -417,7 +418,7 @@ int main(int argc, char *argv[])
                     break;
                 }
 
-                int mem_fd = memfd_create("safebox_content", MFD_CLOEXEC);
+                int mem_fd = memfd_create("content", MFD_CLOEXEC);
                 if (mem_fd < 0)
                 {
                     munmap(map, st.st_size);
@@ -514,7 +515,7 @@ int main(int argc, char *argv[])
 
                 sb_file_header_t header;
                 header.version = SB_VERSION;
-                header.payload_size = file_size + SB_MAGIC_LEN;
+                header.payload_size = htonl(file_size + SB_MAGIC_LEN);
                 memset(header.reserved, 0, 3);
                 write(fd_out, &header, sizeof(header));
 

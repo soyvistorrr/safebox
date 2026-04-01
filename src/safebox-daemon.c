@@ -73,7 +73,7 @@ void manejador_sigterm(int sig)
 }
 
 /* Funcion para leer la contraseña desactivando el eco de la terminal (termios) */
-static void read_password(const char *prompt, char *buf, size_t buflen)
+static void leer_contrasena(const char *prompt, char *buf, size_t buflen)
 {
     printf("%s", prompt);
     fflush(stdout);
@@ -136,7 +136,7 @@ static void read_password(const char *prompt, char *buf, size_t buflen)
         buf[longitud - 1] = '\0';
 }
 
-int main(int argc, caracterar *argv[])
+int main(int argc, char *argv[])
 {
     /* Validacion de argumentos */
     if (argc != 2)
@@ -154,7 +154,7 @@ int main(int argc, caracterar *argv[])
 
     /* Captura segura de la clave maestra */
     char clave_maestra[MAX_KEY_LEN] = {0};
-    read_password("safebox password: ", clave_maestra, sizeof (clave_maestra));
+    leer_contrasena("safebox password: ", clave_maestra, sizeof (clave_maestra));
     if (strlen (clave_maestra) == 0)
     {
         fprintf(stderr, "Error: password vacio\n");
@@ -179,8 +179,8 @@ int main(int argc, caracterar *argv[])
     /* Configuramos la trampa para la senal de apagado (kill -TERM) */
     struct sigaction accion_senal;
     memset(&accion_senal, 0, sizeof(accion_senal));
-    accion_senal.accion_senal_handler = handle_sigterm;
-    sigemptyset(&accion_senal.accion_senal_mask);
+    accion_senal.sa_handler = manejador_sigterm;
+    sigemptyset(&accion_senal.sa_mask);
     sigaction(SIGTERM, &accion_senal, NULL);
 
     /* Redirigimos la entrada estandar (teclado) a un pozo ciego */
@@ -246,7 +246,7 @@ int main(int argc, caracterar *argv[])
     LOG(STDOUT_FILENO, SB_LOG_INFO, "escuchando en %s", SB_SOCKET_PATH);
 
     /* BUCLE PRINCIPAL DE ATENCION */
-    while (keep_running)
+    while (daemon_activo)
     {
         struct sockaddr_un direccion_cliente;
         socklen_t tamano_cliente = sizeof(direccion_cliente);
@@ -457,7 +457,7 @@ int main(int argc, caracterar *argv[])
 
                 /* Desciframos el resto del archivo (saltandonos los 4 bytes magicos) y guardamos en RAM */
                 size_t tamano_contenido = tamano_real_cifrado - SB_MAGIC_LEN;
-                caracterar *texto_plano = malloc(tamano_contenido);
+                char *texto_plano = malloc(tamano_contenido);
                 if (texto_plano)
                 {
                     for (size_t k = 0; k < tamano_contenido; k++)
@@ -493,8 +493,8 @@ int main(int argc, caracterar *argv[])
                 } buffer_alineado;
                 memset(&buffer_alineado, 0, sizeof(buffer_alineado));
 
-                msg.msg_control = buffer_alineado.buf;
-                msg.msg_controllen = sizeof(buffer_alineado.buf);
+                msg.msg_control = buffer_alineado.buffer_crudo;
+                msg.msg_controllen = sizeof(buffer_alineado.buffer_crudo);
 
                 struct cmsghdr *cabecera_control = CMSG_FIRSTHDR(&msg);
                 cabecera_control->cmsg_level = SOL_SOCKET;

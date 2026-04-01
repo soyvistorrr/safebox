@@ -128,7 +128,7 @@ int sb_del(int sockfd, const char *filename)
 
     /* Avisamos al daemon que queremos borrar un archivo */
     uint8_t codigo_operacion = SB_OP_DEL;
-    if (send(sockfd, &op, sizeof(uint8_t), 0) != sizeof(uint8_t))
+    if (send(sockfd, &codigo_operacion, sizeof(uint8_t), 0) != sizeof(uint8_t))
         return -1;
 
     /* Calculamos la longitud del nombre asegurandonos de inculuir el byte nulo '\0' */

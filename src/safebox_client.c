@@ -36,6 +36,17 @@
 #include "safebox.h"
 #include "safebox_client.h"
 
+/**
+ * @brief Establece la conexión con el daemon de la bóveda y realiza la autenticación.
+ *
+ * Crea un socket de dominio UNIX, se conecta a la ruta especificada y envía
+ * un mensaje de autenticación utilizando el hash DJB2 de la contraseña proporcionada.
+ * Espera la confirmación del daemon (SB_OK) para dar por válida la sesión.
+ *
+ * @param socket_path Ruta en el sistema de archivos hacia el socket UNIX del daemon.
+ * @param password Contraseña en texto plano para autenticarse.
+ * @return int El descriptor del socket (fd) conectado si es exitoso, o -1 en caso de error.
+ */
 int sb_connect(const char *socket_path, const char *password)
 {
     /* Solicitamos al sistema operativo un canal de comunicacion local (socket) */
@@ -47,7 +58,7 @@ int sb_connect(const char *socket_path, const char *password)
     struct sockaddr_un direccion_servidor;
     memset(&direccion_servidor, 0, sizeof(struct sockaddr_un));
     direccion_servidor.sun_family = AF_UNIX;
-    
+
     /* Copiamos la ruta de forma segura para evitar desbordamientos de memoria */
     strncpy(direccion_servidor.sun_path, socket_path, sizeof(direccion_servidor.sun_path) - 1);
 
@@ -79,6 +90,18 @@ int sb_connect(const char *socket_path, const char *password)
     return socket_cliente;
 }
 
+/**
+ * @brief Solicita al daemon la lista de archivos almacenados en la bóveda.
+ *
+ * Envía el código de operación SB_OP_LIST. Recibe primero el estado y el tamaño
+ * total de la lista, para luego leer los nombres de los archivos en bloques
+ * protegiendo el buffer local contra desbordamientos.
+ *
+ * @param sockfd Descriptor del socket conectado al daemon.
+ * @param buf Buffer de memoria local donde se guardará la lista recibida como un string.
+ * @param buflen Tamaño máximo del buffer (incluyendo el espacio para el terminador nulo).
+ * @return int La cantidad de bytes leídos y almacenados en el buffer, o -1 en caso de error.
+ */
 int sb_list(int sockfd, char *buf, size_t buflen)
 {
     /* validaciones basicas de seguridad para evitar Segmentation Faults */
@@ -119,6 +142,16 @@ int sb_list(int sockfd, char *buf, size_t buflen)
     return bytes_a_leer;
 }
 
+/**
+ * @brief Solicita al daemon la eliminación de un archivo específico de la bóveda.
+ *
+ * Envía el código de operación SB_OP_DEL seguido del nombre del archivo
+ * que se desea borrar. Espera la confirmación del daemon sobre el éxito de la operación.
+ *
+ * @param sockfd Descriptor del socket conectado al daemon.
+ * @param filename Nombre del archivo dentro de la bóveda que se desea eliminar.
+ * @return int 0 si el archivo fue eliminado exitosamente, o -1 en caso de error.
+ */
 int sb_del(int sockfd, const char *filename)
 {
     if (sockfd < 0 || filename == NULL)
@@ -146,6 +179,18 @@ int sb_del(int sockfd, const char *filename)
     return 0;
 }
 
+/**
+ * @brief Envía un archivo local al daemon para que sea cifrado y guardado en la bóveda.
+ *
+ * Abre el archivo local indicado, extrae su tamaño y envía la petición SB_OP_PUT.
+ * Luego transfiere el contenido del archivo a través de la red en fragmentos (chunks)
+ * de 4KB para evitar sobrecargar la memoria, esperando finalmente la confirmación del daemon.
+ *
+ * @param sockfd Descriptor del socket conectado al daemon.
+ * @param filename Nombre con el que se guardará el archivo dentro de la bóveda.
+ * @param filepath Ruta local del archivo en el disco duro del cliente que será enviado.
+ * @return int 0 si la transferencia y el cifrado fueron exitosos, o -1 en caso de error.
+ */
 int sb_put(int sockfd, const char *filename, const char *filepath)
 {
     if (sockfd < 0 || filename == NULL || filepath == NULL)
@@ -220,6 +265,14 @@ int sb_put(int sockfd, const char *filename, const char *filepath)
     return (status == SB_OK) ? 0 : -1;
 }
 
+/**
+ * @brief Cierra la sesión activa con el daemon de forma limpia.
+ *
+ * Envía el código de operación SB_OP_BYE al daemon para notificar la
+ * desconexión inminente y luego cierra el descriptor del socket local.
+ *
+ * @param sockfd Descriptor del socket conectado al daemon.
+ */
 void sb_bye(int sockfd)
 {
     /* Nos despedimos del daemon formalmente para que cierre su lado de la conexion */
@@ -228,6 +281,18 @@ void sb_bye(int sockfd)
     close(sockfd); /* cerramos nuestro lado de la comunicacion */
 }
 
+/**
+ * @brief Solicita un archivo de la bóveda y recibe su descriptor de archivo descifrado en RAM.
+ *
+ * Envía la petición SB_OP_GET con el nombre del archivo. Utiliza la llamada al
+ * sistema `recvmsg` configurada con la estructura `msghdr` y `cmsghdr` para
+ * extraer los metadatos de control (SCM_RIGHTS) inyectados por el kernel,
+ * obteniendo así un file descriptor válido que apunta al contenido en texto claro.
+ *
+ * @param sockfd Descriptor del socket conectado al daemon.
+ * @param filename Nombre del archivo que se desea extraer de la bóveda.
+ * @return int El descriptor de archivo (fd) apuntando al contenido descifrado en RAM, o -1 en caso de error.
+ */
 int sb_get(int sockfd, const char *filename)
 {
     if (sockfd < 0 || filename == NULL)
@@ -276,7 +341,7 @@ int sb_get(int sockfd, const char *filename)
 
     /* Extraemos la metadata de control del sobre */
     struct cmsghdr *cabecera_control = CMSG_FIRSTHDR(&msg);
-   
+
     /* Verificamos que el paquete realmente contenga "Derechos" (SMC_RIGTHS) que representan al FD */
     if (cabecera_control != NULL && cabecera_control->cmsg_level == SOL_SOCKET && cabecera_control->cmsg_type == SCM_RIGHTS)
     {

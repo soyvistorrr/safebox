@@ -208,5 +208,5 @@ bash tests/test_master.sh
 **Victor Hernández**  
 - Computer Engineering Student @ [Universidad Simón Bolívar (USB)](https://www.usb.ve/)
 - GitHub: [@soyvistorrr](https://github.com/soyvistorrr)
-- LinkedIn: [Victor Hernández](https://linkedin.com/in/victormhernandeza)
+- LinkedIn: [Victor Hernández](https://linkedin.com/in/soyvistorr3009)
 - Email: victormhernandeza3009@gmail.com
